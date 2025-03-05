@@ -5,18 +5,15 @@ local PlayerData = QBCore.Functions.GetPlayerData()
 local currentTerminal = nil  -- will be set to 1 or 2 when a terminal is used
 local route = 1              -- current route index for the active terminal
 local max = 0                -- number of NPC locations for the active terminal
-local direction = 1          -- 1 means moving forward, -1 means moving backward
 local busBlips = {}          -- table to store blips for each terminal
 
 local NpcData = {
     Active = false,
     CurrentNpc = nil,
     LastNpc = nil,
-    CurrentDeliver = nil,
-    LastDeliver = nil,
     Npc = nil,
     NpcBlip = nil,
-    DeliveryBlip = nil,
+    PickupBlip = nil,
     NpcTaken = false,
     NpcDelivered = false,
     CountDown = 180
@@ -32,15 +29,15 @@ local BusData = {
 -- Helper Functions
 --------------------------------------------------
 local function resetNpcTask()
+    if NpcData.NpcBlip then RemoveBlip(NpcData.NpcBlip) end
+    if NpcData.PickupBlip then RemoveBlip(NpcData.PickupBlip) end
     NpcData = {
         Active = false,
         CurrentNpc = nil,
         LastNpc = nil,
-        CurrentDeliver = nil,
-        LastDeliver = nil,
         Npc = nil,
         NpcBlip = nil,
-        DeliveryBlip = nil,
+        PickupBlip = nil,
         NpcTaken = false,
         NpcDelivered = false,
     }
@@ -49,7 +46,7 @@ end
 
 -- Create blips for terminals (always visible if the player has the bus job)
 local function updateBlips()
-    if PlayerData.job.name == Config.JobName then
+    if PlayerData.job and PlayerData.job.name == Config.JobName then
         for terminalID, termData in pairs(Config.Terminals) do
             if not busBlips[terminalID] then
                 busBlips[terminalID] = AddBlipForCoord(termData.BusSpawn.x, termData.BusSpawn.y, termData.BusSpawn.z)
@@ -87,15 +84,10 @@ local function whitelistedVehicle()
     return retval
 end
 
--- Update the route index based on the current direction.
+-- Updated nextStop: اگر هنوز به انتها نرسیده باشد، اندیس را افزایش می‌دهد
 local function nextStop()
-    route = route + direction
-    if route > max then
-        route = max - 1
-        direction = -1
-    elseif route < 1 then
-        route = 2
-        direction = 1
+    if route < max then
+        route = route + 1
     end
 end
 
@@ -104,44 +96,26 @@ local function getActiveTerminalConfig()
     return Config.Terminals[currentTerminal]
 end
 
-local function GetDeliveryLocation()
-    nextStop()  -- update the route index based on current direction
+-- New function: GetPickupLocation
+-- اگر هنوز مسیر به پایان نرسیده باشد، بلپ جدید ساخته می‌شود
+local function GetPickupLocation()
+    nextStop()  -- افزایش اندیس در صورت امکان
     local termConfig = getActiveTerminalConfig()
     local loc = termConfig.NPCLocations.Locations[route]
-    if NpcData.DeliveryBlip then
-        RemoveBlip(NpcData.DeliveryBlip)
+    
+    if NpcData.PickupBlip then
+        RemoveBlip(NpcData.PickupBlip)
+        NpcData.PickupBlip = nil
     end
-    NpcData.DeliveryBlip = AddBlipForCoord(loc.x, loc.y, loc.z)
-    SetBlipColour(NpcData.DeliveryBlip, 3)
-    SetBlipRoute(NpcData.DeliveryBlip, true)
-    SetBlipRouteColour(NpcData.DeliveryBlip, 3)
-    NpcData.LastDeliver = route
 
-    local PolyZone = CircleZone:Create(vector3(loc.x, loc.y, loc.z), 5, {
-        name = "busjobdeliver",
-        useZ = true,
-        -- debugPoly = true
-    })
-    PolyZone:onPlayerInOut(function(isPointInside)
-        if isPointInside then
-            local veh = GetVehiclePedIsIn(PlayerPedId(), false)
-            FreezeEntityPosition(veh, true)
-            QBCore.Functions.Notify("10 Saniye Zaman Piyade Shodane Mosaferan ..", "primary")
-            Wait(10000)  -- 10 second wait
-            FreezeEntityPosition(veh, false)
-            
-            -- Keep the NPC on board.
-            QBCore.Functions.Notify(Lang.t('Zamane Piyade Shodan Tamam Shod.'), 'success')
-            if NpcData.DeliveryBlip then RemoveBlip(NpcData.DeliveryBlip) end
-            
-            resetNpcTask()
-            TriggerEvent('qb-busjob:client:DoBusNpc')
-            exports["qb-core"]:HideText()
-            PolyZone:destroy()
-        else
-            exports["qb-core"]:HideText()
-        end
-    end)
+    NpcData.PickupBlip = AddBlipForCoord(loc.x, loc.y, loc.z)
+    SetBlipColour(NpcData.PickupBlip, 3)
+    SetBlipRoute(NpcData.PickupBlip, true)
+    SetBlipRouteColour(NpcData.PickupBlip, 3)
+    NpcData.LastPickup = route
+
+    resetNpcTask()
+    TriggerEvent('qb-busjob:client:DoBusNpc')
 end
 
 local function closeMenuFull()
@@ -169,8 +143,19 @@ local function busGarage()
 end
 
 RegisterNetEvent("qb-busjob:client:TakeVehicle", function(data)
+    if IsPedInAnyVehicle(PlayerPedId(), false) then
+        QBCore.Functions.Notify("Zamani ke dar khodro hasti, nemitavanid khodro jadid spawn konid", "error")
+        return
+    end
+
     local termConfig = getActiveTerminalConfig()
     local coords = termConfig.BusSpawn
+    local spawnPos = vector3(coords.x, coords.y, coords.z)
+    local nearbyVehicle = GetClosestVehicle(spawnPos.x, spawnPos.y, spawnPos.z, 5.0, 0, 70)
+    if nearbyVehicle and nearbyVehicle ~= 0 then
+        QBCore.Functions.Notify("Dar Makane Spawn Khodroei Hast", "error")
+        return
+    end
     if BusData.Active then
         QBCore.Functions.Notify(Lang.t('Aval Otubos Ghabli Ro Tahvil Bedahid'), 'error')
         return
@@ -178,7 +163,7 @@ RegisterNetEvent("qb-busjob:client:TakeVehicle", function(data)
         QBCore.Functions.TriggerCallback('QBCore:Server:SpawnVehicle', function(netId)
             local veh = NetToVeh(netId)
             SetVehicleNumberPlateText(veh, Lang.t('LS___BUS') .. tostring(math.random(1000, 9999)))
-            exports['LegacyFuel']:SetFuel(veh, 100.0)
+            exports['lc_fuel']:SetFuel(veh, 100.0)
             closeMenuFull()
             TaskWarpPedIntoVehicle(PlayerPedId(), veh, -1)
             TriggerEvent("vehiclekeys:client:SetOwner", QBCore.Functions.GetPlate(veh))
@@ -193,7 +178,7 @@ RegisterNetEvent("qb-busjob:client:TakeVehicle", function(data)
 end)
 
 --------------------------------------------------
--- NPC Mission (Pickup/Delivery)
+-- NPC Mission (Pickup)
 --------------------------------------------------
 RegisterNetEvent('qb-busjob:client:DoBusNpc', function()
     if whitelistedVehicle() then
@@ -219,7 +204,7 @@ RegisterNetEvent('qb-busjob:client:DoBusNpc', function()
             NpcData.Active = true
 
             local PolyZone = CircleZone:Create(vector3(loc.x, loc.y, loc.z), 5, {
-                name = "busjobdeliver",
+                name = "busjobpickupzone",
                 useZ = true,
                 -- debugPoly = true
             })
@@ -228,8 +213,8 @@ RegisterNetEvent('qb-busjob:client:DoBusNpc', function()
                 if isPointInside then
                     local veh = GetVehiclePedIsIn(PlayerPedId(), false)
                     FreezeEntityPosition(veh, true)
-                    QBCore.Functions.Notify("10 Saniye Zaman Savar Shodane Mosaferan ..", "primary")
-                    Wait(10000)
+                    QBCore.Functions.Notify("10 Saniye Zaman Savar Shodane Mosaferan ...", "primary")
+                    Wait(10000)  -- 10 ثانیه صبر جهت سوارسازی
                     FreezeEntityPosition(veh, false)
                     
                     local ped = PlayerPedId()
@@ -242,16 +227,38 @@ RegisterNetEvent('qb-busjob:client:DoBusNpc', function()
                             break
                         end
                     end
+                    if freeSeat == nil then
+                        for seat = 0, maxSeats - 1 do
+                            if not IsVehicleSeatFree(veh, seat) then
+                                local occupant = GetPedInVehicleSeat(veh, seat)
+                                if occupant and occupant ~= 0 then
+                                    TaskLeaveVehicle(occupant, veh, 16)
+                                end
+                            end
+                        end
+                        Wait(2000)
+                        freeSeat = nil
+                        for i = maxSeats - 1, 0, -1 do
+                            if IsVehicleSeatFree(veh, i) then
+                                freeSeat = i
+                                break
+                            end
+                        end
+                    end
                     ClearPedTasksImmediately(NpcData.Npc)
                     FreezeEntityPosition(NpcData.Npc, false)
                     TaskEnterVehicle(NpcData.Npc, veh, -1, freeSeat, 1.0, 0)
                     BusData.PassengerOnBus = true
-                    QBCore.Functions.Notify(Lang.t('info.goto_busstop'), 'primary')
                     if NpcData.NpcBlip then RemoveBlip(NpcData.NpcBlip) end
-                    GetDeliveryLocation()
+
+                    -- اگر هنوز مسیر کامل نشده باشد، تنظیم نقطه برداشت بعدی انجام می‌شود
+                    if route < max then
+                        GetPickupLocation()
+                    else
+                        QBCore.Functions.Notify("Shoma Khat Terminal Ro Tey Kardid , Khodro Ro be Terminal Tahvil Bedahid", "success")
+                    end
                     NpcData.NpcTaken = true
 
-                    -- Fetch and add the reward money for the current terminal
                     QBCore.Functions.TriggerCallback('qb-busjob:server:GetTerminalReward', function(reward)
                         TriggerServerEvent('qb-busjob:server:AddMoney', reward)
                     end, currentTerminal)
@@ -274,8 +281,6 @@ end)
 --------------------------------------------------
 -- Terminal Zones – Spawn and Deposit
 --------------------------------------------------
-
--- Create a spawn zone for each terminal
 for terminalID, termData in pairs(Config.Terminals) do
     CreateThread(function()
         local inRange = false
@@ -286,7 +291,7 @@ for terminalID, termData in pairs(Config.Terminals) do
         })
         spawnZone:onPlayerInOut(function(isPointInside)
             inRange = isPointInside
-            if isPointInside and PlayerData.job.name == Config.JobName then
+            if isPointInside and PlayerData.job and PlayerData.job.name == Config.JobName then
                 exports["qb-core"]:DrawText("E Bezan Ta Otubus Ro Tahvil Begiri/Bedi (Terminal " .. terminalID .. ")", "left")
             else
                 exports["qb-core"]:HideText()
@@ -294,7 +299,7 @@ for terminalID, termData in pairs(Config.Terminals) do
         end)
         while true do
             Wait(5)
-            if inRange and PlayerData.job.name == Config.JobName then
+            if inRange and PlayerData.job and PlayerData.job.name == Config.JobName then
                 if IsControlJustReleased(0, 38) then
                     currentTerminal = terminalID
                     route = 1
@@ -307,7 +312,6 @@ for terminalID, termData in pairs(Config.Terminals) do
     end)
 end
 
--- Create a deposit zone for each terminal
 for terminalID, termData in pairs(Config.Terminals) do
     CreateThread(function()
         local inRange = false
@@ -318,7 +322,7 @@ for terminalID, termData in pairs(Config.Terminals) do
         })
         depositZone:onPlayerInOut(function(isPointInside)
             inRange = isPointInside
-            if isPointInside and PlayerData.job.name == Config.JobName then
+            if isPointInside and PlayerData.job and PlayerData.job.name == Config.JobName then
                 exports["qb-core"]:DrawText("E Bezan Ta Otubus Ro Tahvil Begiri/Bedi (Terminal " .. terminalID .. ")", "left")
             else
                 exports["qb-core"]:HideText()
@@ -326,7 +330,7 @@ for terminalID, termData in pairs(Config.Terminals) do
         end)
         while true do
             Wait(5)
-            if inRange and PlayerData.job.name == Config.JobName then
+            if inRange and PlayerData.job and PlayerData.job.name == Config.JobName then
                 if IsControlJustReleased(0, 38) then
                     if BusData.Active and BusData.Vehicle and DoesEntityExist(BusData.Vehicle) then
                         TriggerEvent("vehiclekeys:client:RemoveOwner", QBCore.Functions.GetPlate(BusData.Vehicle))
@@ -361,7 +365,7 @@ CreateThread(function()
                 if timer >= timeOut and not IsPedInAnyVehicle(PlayerPedId(), false) then
                     QBCore.Functions.Notify("Chon Otubus Ro Tark Kardid , Kar Az Shoma Gerefte Shod !", "error")
                     if NpcData.NpcBlip then RemoveBlip(NpcData.NpcBlip) NpcData.NpcBlip = nil end
-                    if NpcData.DeliveryBlip then RemoveBlip(NpcData.DeliveryBlip) NpcData.DeliveryBlip = nil end
+                    if NpcData.PickupBlip then RemoveBlip(NpcData.PickupBlip) NpcData.PickupBlip = nil end
                     if NpcData.Npc and DoesEntityExist(NpcData.Npc) then
                         DeletePed(NpcData.Npc)
                     end
