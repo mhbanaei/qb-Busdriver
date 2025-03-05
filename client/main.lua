@@ -334,10 +334,25 @@ for terminalID, termData in pairs(Config.Terminals) do
                 if IsControlJustReleased(0, 38) then
                     if BusData.Active and BusData.Vehicle and DoesEntityExist(BusData.Vehicle) then
                         TriggerEvent("vehiclekeys:client:RemoveOwner", QBCore.Functions.GetPlate(BusData.Vehicle))
-                        DeleteVehicle(BusData.Vehicle)
-                        BusData.Active = false
-                        BusData.Vehicle = nil
-                        QBCore.Functions.Notify("Otubus Ro Tahvil Dadid!", "success")
+                        QBCore.Functions.Notify("Dar Hale Tahvil Otubos Va Piyade Shodane Mosafer Ha ..", "primary")
+                        CreateThread(function()
+                             Wait(5000)  -- Wait 5 seconds before deleting passengers
+                             local maxSeats = GetVehicleMaxNumberOfPassengers(BusData.Vehicle)
+                             for seat = -1, maxSeats - 1 do
+                                 local ped = GetPedInVehicleSeat(BusData.Vehicle, seat)
+                                 if ped and ped ~= 0 and ped ~= PlayerPedId() then
+                                     DeletePed(ped)
+                                 end
+                             end
+                             if NpcData.Npc and DoesEntityExist(NpcData.Npc) then
+                                 DeletePed(NpcData.Npc)
+                                 NpcData.Npc = nil
+                             end
+                             DeleteVehicle(BusData.Vehicle)
+                             BusData.Active = false
+                             BusData.Vehicle = nil
+                             QBCore.Functions.Notify("Otubus Ro Tahvil Dadid!", "success")
+                        end)
                     else
                         QBCore.Functions.Notify("Otubos Khadamati Ro Entekhab Konid", "error")
                     end
@@ -355,7 +370,7 @@ CreateThread(function()
         Wait(1000)
         if NpcData.Active then
             if not IsPedInAnyVehicle(PlayerPedId(), false) then
-                local timeOut = 15
+                local timeOut = 1
                 local timer = 0
                 while timer < timeOut do
                     Wait(1000)
